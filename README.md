@@ -21,6 +21,8 @@
 
 ![XHS Marketing Master Demo](public/readme-assets/demo-preview.webp)
 
+[观看完整 63 秒演示视频](https://github.com/Yice-AI/xhs-marketing-master/releases/tag/demo-v1)
+
 ![XHS Marketing Master Workflow](public/readme-assets/demo-overview.jpg)
 
 ## 核心能力
