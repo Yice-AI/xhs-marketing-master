@@ -1,0 +1,110 @@
+# macOS system files
+**/.DS_Store
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Runtime data
+data/pids.txt
+
+# Generated images and data
+data/
+src/data/
+src/crawler_data/xhs/json/*.json
+
+# Browser data
+src/crawler_browser_data/
+browser_data/
+
+# Archive
+archive/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+venv/
+.venv/
+dist/
+build/
+
+# Environment variables
+.env
+.env.local
+
+# Local runtime artifacts
+.trae/
+browser_data/
+backend/logs/
+uploads/
+shared/.env.production
+shared/downloads/
+shared/external-artifacts/
+shared/images/
+shared/rendered/
+tmp_gemini_test/
+tmp/
+.backup/
+artifacts/
+*.db
+*.zip
+*.tar.gz
+*.exe
+*-darwin-arm64
+*-darwin-arm64-new
+*-userdata
+*-mcp-cdp
+backend/src/data/images/
+static/downloads/
+extension/dist/
+extension/release/
+deploy/.rendered/
+mcp-service/cookies.json
+mcp-service/docker/data/cookies.json
+packages/
+client_packages/
+archive/
+bin/
+mcp-service/assets/
+mcp-service/examples/
+
+# Keep only the canonical extension package in git; generated release artifacts stay local
+public/downloads/release-manifest.json
+public/downloads/xhs-marketing-extension.zip
+!public/downloads/
+!public/downloads/crx-extension-0.0.0.zip
+public/downloads/crx-extension-0.0.0/
+
+# Local git safety backups
+.git_safety/
+
+# Local tool metadata
+.serena/
