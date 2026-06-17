@@ -15,6 +15,14 @@
 - **采集和发布链路割裂**：Web 负责策略和内容生产，浏览器扩展负责真实页面里的采集、登录检测和发布执行。
 - **团队复盘难**：保留历史记录、草稿、产品档案、策略日志和任务状态，方便持续迭代内容资产。
 
+## 真实演示
+
+从产品访谈、对标采集、策略生成、多重出图到发布前整理，完整链路可以在一个工作台里完成。
+
+![XHS Marketing Master Demo](public/readme-assets/demo-preview.webp)
+
+![XHS Marketing Master Workflow](public/readme-assets/demo-overview.jpg)
+
 ## 核心能力
 
 ### 1. 小红书策略引擎
