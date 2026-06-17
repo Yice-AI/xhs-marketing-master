@@ -39,7 +39,7 @@
 
 ## 视觉预览
 
-这些图片放在仓库的 `public/style-previews/` 目录里，GitHub 会在 README 中直接渲染。
+以下是系统可生成的部分封面与版式效果示例，覆盖强卖点封面、清爽信息流、手账笔记风、SaaS 功能卡片和运营流程表达。
 
 | Bold Cover | Clean Flow | Notebook Method |
 | --- | --- | --- |
