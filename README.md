@@ -1,10 +1,14 @@
 # xhs-marketing-master
 
+**AI-powered Rednote / Xiaohongshu marketing workspace for strategy, copywriting, image generation, browser extension workflows, and content operations.**
+
 面向小红书运营、品牌营销和内容团队的 AI 增长工作台。
 
 它把“小红书内容运营”里最耗时间的环节串成一条工作流：对标样本分析、产品卖点访谈、爆款策略生成、标题与正文创作、封面/配图生成、历史草稿管理，以及通过浏览器插件完成真实页面采集与发布前检查。
 
 传统运营常常卡在三个地方：不知道选什么角度、写出来不像小红书、封面和配图跟不上内容节奏。这个项目的目标就是把这些工作系统化，让运营从“靠感觉写一篇”升级成“按策略生产、按样本校准、按结果复盘”。
+
+English summary: this project is a public noncommercial snapshot of an AI marketing workspace for Rednote/Xiaohongshu content teams. It combines content strategy, benchmark note analysis, AI copywriting, AI image generation, browser-extension automation, and content asset management.
 
 ## 它能解决什么问题
 
@@ -66,6 +70,10 @@
 - 想研究“小红书内容自动化、AI 生图、策略生成、浏览器插件协同”的开发者。
 - 希望把运营经验沉淀成可复用工作流的独立开发者和增长团队。
 
+## 关键词
+
+小红书运营工具、Rednote marketing tool、Xiaohongshu AI marketing、AI content strategy、AI copywriting、AI image generation、browser extension automation、content operations、marketing automation、growth workspace。
+
 ## 本地开发
 
 ```bash
@@ -101,6 +109,14 @@ cp .env.example .env
 生产环境配置、内部模型网关、云服务器部署脚本和远程执行器不会出现在公开仓库里。
 
 > 这是从内部仓库导出的公开快照，已移除内部部署脚本、私有网关配置、内网 IP、生产环境变量、品牌素材和运行数据。
+
+## Roadmap
+
+- Public demo mode：提供更低门槛的演示数据和本地体验流程。
+- English README：补充完整英文文档，方便海外开发者理解 Rednote/Xiaohongshu 场景。
+- Docker quick start：降低本地试用和部署门槛。
+- More visual templates：增加更多小红书封面、教程卡片、对比测评、SaaS 功能图模板。
+- Strategy engine examples：沉淀更多产品类型的策略生成样例。
 
 ## 开源协议
 
