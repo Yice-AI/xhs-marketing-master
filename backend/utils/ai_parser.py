@@ -113,30 +113,33 @@ def clean_and_parse_ai_json(text: str) -> Any:
         if fragment:
             cleaned = fragment
 
-    # 4. 修复常见全角字符和控制字符（注：移除了全局中文标点替换，以避免破坏正常的小红书文案）
-    cleaned = cleaned.replace('“', '"').replace('”', '"').replace('‘', "'").replace('’', "'")
+    # 4. 清理控制字符（不做全角引号替换，避免破坏正文中的中文引号）
     cleaned = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', cleaned)
     
-    # 5. 尝试解析
+    # 5. 先尝试直接解析，成功则返回；失败再做全角引号替换后重试
     parsed_obj = None
     try:
         parsed_obj = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        # 尝试使用 json_repair (如果安装了)
+    except json.JSONDecodeError:
         try:
-            from json_repair import repair_json
-            repaired = repair_json(cleaned)
-            parsed_obj = json.loads(repaired)
-        except Exception:
-            # 次级修复：做轻量正则修补
+            cleaned = cleaned.replace('“', '"').replace('”', '"').replace('‘', "'").replace('’', "'")
+            parsed_obj = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            # 尝试使用 json_repair (如果安装了)
             try:
-                fixed = _repair_json_with_regex(cleaned)
-                fixed = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', fixed)
-                parsed_obj = json.loads(fixed)
+                from json_repair import repair_json
+                repaired = repair_json(cleaned)
+                parsed_obj = json.loads(repaired)
             except Exception:
-                logger.error(f"JSON 解析失败. 原始长度: {len(text)}, 清理后长度: {len(cleaned)}")
-                logger.error(f"清理后的内容片段: {cleaned[:500]}...")
-                raise e
+                # 次级修复：做轻量正则修补
+                try:
+                    fixed = _repair_json_with_regex(cleaned)
+                    fixed = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', fixed)
+                    parsed_obj = json.loads(fixed)
+                except Exception:
+                    logger.error(f"JSON 解析失败. 原始长度: {len(text)}, 清理后长度: {len(cleaned)}")
+                    logger.error(f"清理后的内容片段: {cleaned[:500]}...")
+                    raise e
 
     # 6. 后处理：处理转义过度的换行符
     return _unescape_literal_newlines(parsed_obj)
