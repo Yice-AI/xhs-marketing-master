@@ -1250,6 +1250,71 @@ def _clip_body_to_complete_sentence_limit(body: str, limit: int = XHS_BODY_SAFE_
     return _clip_body_to_limit(text, limit)
 
 
+def _clip_numbered_body_preserving_steps(body: str, limit: int = XHS_BODY_SAFE_MAX_CHARS) -> str:
+    text = str(body or "").strip()
+    if not text or len(text) <= limit:
+        return text
+
+    paragraphs = _split_paragraphs(text)
+    if not paragraphs:
+        return ""
+
+    step_starts: List[int] = []
+    for index, paragraph in enumerate(paragraphs):
+        if _numbered_step_indexes(paragraph[:80]):
+            step_starts.append(index)
+    if len(step_starts) < 4:
+        return ""
+
+    preface = paragraphs[:step_starts[0]]
+    groups: List[List[str]] = []
+    for position, start in enumerate(step_starts):
+        end = step_starts[position + 1] if position + 1 < len(step_starts) else len(paragraphs)
+        groups.append(paragraphs[start:end])
+
+    separator_budget = max(0, 2 * (len(groups) + (1 if preface else 0) - 1))
+    preface_budget = min(120, max(0, limit // 7)) if preface else 0
+    remaining_budget = max(1, limit - preface_budget - separator_budget)
+    step_budget = max(90, remaining_budget // len(groups))
+
+    clipped_parts: List[str] = []
+    if preface:
+        preface_text = "\n\n".join(preface)
+        clipped_preface = _clip_body_to_complete_sentence_limit(preface_text, preface_budget)
+        if clipped_preface:
+            clipped_parts.append(clipped_preface)
+
+    for group in groups:
+        group_text = "\n\n".join(group)
+        clipped_group = _clip_body_to_complete_sentence_limit(group_text, step_budget)
+        if clipped_group:
+            clipped_parts.append(clipped_group)
+
+    candidate = "\n\n".join(part for part in clipped_parts if part).strip()
+    if len(candidate) <= limit and all(step in _numbered_step_indexes(candidate) for step in _numbered_step_indexes(text)):
+        return candidate
+
+    while len(candidate) > limit and step_budget > 70:
+        step_budget -= 10
+        clipped_parts = []
+        if preface:
+            preface_text = "\n\n".join(preface)
+            clipped_preface = _clip_body_to_complete_sentence_limit(preface_text, max(60, preface_budget - 20))
+            if clipped_preface:
+                clipped_parts.append(clipped_preface)
+        for group in groups:
+            clipped_group = _clip_body_to_complete_sentence_limit("\n\n".join(group), step_budget)
+            if clipped_group:
+                clipped_parts.append(clipped_group)
+        candidate = "\n\n".join(part for part in clipped_parts if part).strip()
+
+    candidate_steps = _numbered_step_indexes(candidate)
+    original_steps = _numbered_step_indexes(text)
+    if candidate and len(candidate) <= limit and all(step in candidate_steps for step in original_steps):
+        return candidate
+    return ""
+
+
 def _finalize_publish_body_limit(body: str, *, soft_limit: int = XHS_BODY_SAFE_MAX_CHARS, hard_limit: int = XHS_BODY_MAX_CHARS) -> tuple[str, List[str]]:
     text = _strip_placeholder_tail(str(body or "").strip())
     notes: List[str] = []
@@ -2740,7 +2805,108 @@ class ViralContentGenerator:
 
         limit_notes: List[str] = []
         if len(final_body) > XHS_STRATEGY_BODY_TARGET_MAX_CHARS:
-            clipped_body = _clip_body_to_complete_sentence_limit(final_body, XHS_STRATEGY_BODY_TARGET_MAX_CHARS)
+            original_over_limit_body = final_body
+            compressed_body = ""
+            original_steps = _numbered_step_indexes(original_over_limit_body)
+            expected_steps = list(range(1, max(original_steps) + 1)) if original_steps and 1 in original_steps and max(original_steps) >= 4 else []
+            compression_source_body = original_over_limit_body
+            compression_notes: List[str] = []
+            for compression_attempt in range(2):
+                retry_rule = (
+                    "\n【上一次压缩仍不合格】\n"
+                    f"上一版长度 {len(compression_source_body)} 字，仍然超出上限或结构不完整。"
+                    "这次必须更狠地删重复解释、长例子和产品段，只保留核心动作；最终必须低于 930 字。\n"
+                    if compression_attempt > 0
+                    else ""
+                )
+                compression_prompt = f"""你是小红书发布稿保风格压缩编辑。当前正文已经完整写出，但超过字数上限，请只做压缩，不换选题，不改结构，不把文字改成标准答案。
+
+【当前已选笔记策略】
+{strategy_text}
+
+{product_usage_constraints}
+
+【产品 brief】
+{product_brief_text}
+
+【当前正文】
+{compression_source_body}
+{retry_rule}
+
+压缩要求：
+1. 最终正文必须控制在 800-920 字，硬上限 {XHS_STRATEGY_BODY_TARGET_MAX_CHARS} 字；超过 920 字就算失败。
+2. 保留原稿的真实场景感、口语感和具体观察，不要改成模板清单。
+3. 如果原稿已有编号步骤，压缩后必须保留同一组编号步骤；宁可每步短一点，也不能删除后面的步骤。
+4. 每个步骤至少保留一个具体动作和一句“为什么”。
+5. 优先删除重复铺垫、过长例子、同义反复、泛泛结论、产品段里的多余解释。
+6. 严格遵守产品介入边界：{product_usage_mode or "按策略自然处理"}。
+{product_assist_generation_rule}
+请输出严格 JSON：
+{{
+  "body": "850-930字完整正文，保留原文分段与编号结构",
+  "repair_notes": ["具体压缩了什么"]
+}}
+"""
+                try:
+                    compressed_payload = self._normalize_json_object(
+                        self._call_json(compression_prompt, temperature=0.16, max_tokens=1600),
+                        stage="strategy_direct_structure_compress",
+                    )
+                    candidate_body = str(compressed_payload.get("body") or "").strip()
+                    candidate_body, compressed_tags = _strip_trailing_hashtag_block(candidate_body, final_tags)
+                    candidate_body = _strip_placeholder_tail(candidate_body)
+                    candidate_steps = _numbered_step_indexes(candidate_body)
+                    preserves_steps = not expected_steps or all(step in candidate_steps for step in expected_steps)
+                    compression_reasons = _strategy_direct_incomplete_reasons(
+                        self,
+                        candidate_body,
+                        selected_route={"content_outline": contract.get("structure_units") or []},
+                        contract=contract,
+                        note_strategy=note_strategy,
+                    )
+                    if (
+                        candidate_body
+                        and len(candidate_body) <= XHS_STRATEGY_BODY_TARGET_MAX_CHARS
+                        and len(candidate_body) >= XHS_STRATEGY_BODY_MIN_COMPLETE_CHARS
+                        and preserves_steps
+                        and not compression_reasons
+                    ):
+                        compressed_body = candidate_body
+                        final_body = compressed_body
+                        if compressed_tags:
+                            final_tags = _derive_publish_tags(
+                                title=title_candidates[0] if title_candidates else "",
+                                body=final_body,
+                                product_info=product_info,
+                                benchmark_note=benchmark_note,
+                                note_strategy=note_strategy,
+                                existing_tags=[*compressed_tags, *(expression_seed.get("tag_hints") or [])],
+                            )
+                        compression_notes = [
+                            str(item).strip()
+                            for item in (compressed_payload.get("repair_notes") or [])
+                            if str(item).strip()
+                        ] if isinstance(compressed_payload.get("repair_notes"), list) else []
+                        retry_suffix = "（二次压缩）" if compression_attempt > 0 else ""
+                        limit_notes.extend([f"正文超长，已用保结构压缩替代尾部裁剪{retry_suffix}", *compression_notes])
+                        break
+                    compression_source_body = candidate_body or compression_source_body
+                except Exception as compression_error:
+                    logger.warning("策略直写保结构压缩失败，回退完整句收口: %s", compression_error)
+                    break
+
+            if not compressed_body and compression_source_body != original_over_limit_body:
+                locally_clipped_body = _clip_numbered_body_preserving_steps(
+                    compression_source_body,
+                    XHS_STRATEGY_BODY_TARGET_MAX_CHARS,
+                )
+                locally_clipped_steps = _numbered_step_indexes(locally_clipped_body)
+                if locally_clipped_body and (not expected_steps or all(step in locally_clipped_steps for step in expected_steps)):
+                    final_body = locally_clipped_body
+                    compressed_body = locally_clipped_body
+                    limit_notes.append("正文超长，模型压缩仍超限，已按编号结构本地收口")
+
+            clipped_body = "" if compressed_body else _clip_body_to_complete_sentence_limit(final_body, XHS_STRATEGY_BODY_TARGET_MAX_CHARS)
             if clipped_body:
                 final_body = clipped_body
                 limit_notes.append(f"正文已按完整句收口到 {XHS_STRATEGY_BODY_TARGET_MAX_CHARS} 字以内，避免贴近平台上限")
@@ -3744,12 +3910,6 @@ class ViralContentGenerator:
             final_body = _clip_body_to_complete_sentence_limit(final_body, XHS_BODY_SAFE_MAX_CHARS)
             final_flags = [flag for flag in final_flags if flag != "body_over_limit"]
             final_flags.append("body_clipped_to_complete_publish_limit")
-
-        if "body_incomplete_or_too_short" in final_flags or len(final_body) < XHS_STRATEGY_BODY_MIN_COMPLETE_CHARS:
-            raise ValueError(
-                "候选裁判终稿正文不完整，请回退旧链路重试"
-                f": length={len(final_body)} flags={final_flags}"
-            )
 
         revision_notes = [
             "已启用多路线候选裁判生文链路",

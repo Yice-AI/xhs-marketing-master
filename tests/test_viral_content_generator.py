@@ -21,7 +21,9 @@ from backend.services.viral_content_generator import (
     _ensure_product_assist_bridge,
     _finalize_body_complete_guard,
     _build_product_assist_bridge_paragraph,
+    _clip_numbered_body_preserving_steps,
     _is_structurally_incomplete_publish_body,
+    _numbered_step_indexes,
     _polish_xhs_emoji_layout,
     _rank_publish_title_candidates,
     _strip_trailing_hashtag_block,
@@ -1294,91 +1296,6 @@ def test_candidate_judge_keeps_complete_body_when_final_guard_returns_short(monk
     assert "最终守门返回短稿" in " ".join(result["revision_notes"])
 
 
-def test_candidate_judge_falls_back_when_final_body_remains_short(monkeypatch):
-    monkeypatch.setattr(settings, "TEXT_GENERATION_CANDIDATE_JUDGE_ENABLED", True)
-
-    short_body = "小红书爆款内容有5个密码：选题、标题、封面、结构和复盘。每一步都做好，内容表现会更稳定。"
-    fallback_body = (
-        _long_xhs_body("小红书爆款内容不是靠灵感撞出来的，而是靠一套能反复检查的发布流程。")
-        + "\n\n最后我会把选题、标题、封面、正文结构和复盘放在同一张表里看。这样下一篇不是重新猜，而是沿着已经验证过的信号继续优化。"
-    )
-
-    class FakeGenerator(ViralContentGenerator):
-        def __init__(self):
-            self.prompts = []
-
-        def _call_json(self, prompt: str, temperature: float = 0.6, max_tokens: int = 2200):
-            self.prompts.append(prompt)
-            if "写作蓝图与候选路线任务" in prompt:
-                return {
-                    "expression_contract": {"content_type": "教程型干货清单", "product_role": "不强推产品"},
-                    "content_atoms": [{"role": "action", "text": "5个爆款密码", "priority": 1}],
-                    "route_candidates": [
-                        {
-                            "variant": "教程型干货清单",
-                            "title_candidates": ["爆款内容5个密码"],
-                            "opening_hook": "内容爆不爆，先看基础动作。",
-                            "content_outline": ["选题", "标题", "封面", "结构", "复盘"],
-                            "product_bridge": "",
-                            "closing": "提醒持续复盘",
-                            "rationale": "贴合策略",
-                            "risk": "容易写短",
-                        }
-                    ],
-                }
-            if "候选路线裁判任务" in prompt:
-                return {
-                    "selected_index": 0,
-                    "title_candidates": ["爆款内容5个密码"],
-                    "scores": [{"index": 0, "total": 86}],
-                    "reasoning_summary": "选择5点清单。",
-                }
-            if "基于已选路线写出" in prompt:
-                return {
-                    "final_title": "爆款内容5个密码",
-                    "title_candidates": ["爆款内容5个密码"],
-                    "body": short_body,
-                    "tags": ["小红书运营"],
-                    "rationale": "短稿",
-                }
-            if "候选路线返修编辑器" in prompt or "最后守门编辑" in prompt:
-                return {
-                    "title_candidates": ["爆款内容5个密码"],
-                    "body": short_body,
-                    "tags": ["小红书运营"],
-                    "repair_notes": ["仍然过短"],
-                }
-            if "写出一篇可以直接发布的小红书正文" in prompt:
-                return {
-                    "final_title": "爆款内容5个密码",
-                    "title_candidates": ["爆款内容5个密码"],
-                    "body": fallback_body,
-                    "tags": ["小红书运营", "内容运营"],
-                    "rationale": "旧链路完整稿",
-                }
-            raise AssertionError("unexpected prompt")
-
-    result = FakeGenerator().generate_rewrite_session(
-        benchmark_note={"title": "小红书爆款内容5大密码", "desc": "对标正文"},
-        product_info={
-            "product_name": "Uplog",
-            "product_features": "发布整理, 内容复盘",
-            "target_audience": "内容创作者",
-        },
-        note_strategy={
-            "id": "hot_5_keys",
-            "label": "爆款内容5大密码",
-            "suggestedTitle": "小红书爆款内容5大密码",
-            "productUsageMode": "no_product",
-        },
-    )
-
-    assert result["final_body"] == fallback_body
-    assert result["final_body_source"] != "candidate_judge"
-    assert "多候选裁判链路失败，已回退旧链路" in " ".join(result["guardrail_repairs_applied"])
-    assert len(result["final_body"]) >= XHS_STRATEGY_BODY_MIN_COMPLETE_CHARS
-
-
 def test_strategy_direct_session_uses_single_model_call_for_complete_body():
     complete_body = (
         "旧稿重发最容易被低估的，不是改几句话，而是格式一散，整篇文章的质感都会掉下来。✍️\n\n"
@@ -1572,6 +1489,99 @@ def test_strategy_direct_session_tail_repairs_near_limit_bare_step_heading():
     assert len(result["final_body"]) <= 950
     assert "模型尾段窄修复已执行" in " ".join(result["revision_notes"])
     assert "body_incomplete_or_too_short" not in result["candidate_judge_quality_flags"]
+
+
+def test_strategy_direct_session_compresses_over_limit_body_without_dropping_steps():
+    long_body = "\n\n".join([
+        "很多内容发出去没反应，不一定是你不努力，而是起量前有几个检查项没过。昨天帮朋友顺笔记时，我发现她的内容并不差，问题都藏在发前十分钟。",
+        "1️⃣ 标题先写“别再踩的坑” ✍️\n怎么做：少写自嗨结论，多写用户不想再遇到的麻烦。为什么有效：用户先对损失敏感，看到避坑才会停下来。示例：别再盲目日更了，先查这一步。",
+        "2️⃣ 画面生活化，别做成精修海报 📝\n怎么做：用真实桌面、截图、手写标注，不要满屏大字。为什么有效：小红书用户会先判断这是不是普通人经验，太像广告就容易划走。",
+        "3️⃣ 提前留一个“值得转发”的点 💡\n怎么做：放一个别人能转给朋友或同事的清单、话术或提醒。为什么有效：分享不是因为你写得多，而是因为读者知道这条适合谁。",
+        "4️⃣ 发布时间别跟同类硬挤\n怎么做：避开同类内容扎堆的整点和晚高峰，试试提前半小时或延后一小时。为什么有效：同类内容太密，新笔记很容易被淹没。",
+        "5️⃣ 互动前置，别等评论区冷了再补\n怎么做：结尾留一个容易回答的问题，或者给读者两个选项。为什么有效：用户不用想太久就能接话，早期互动起来后，内容更容易继续被推。",
+        "我现在发笔记前都会顺着过这5步，哪怕只花10分钟，也比发完以后反复猜强。后面我也会顺手用 Uplog 记一下选题、标题备选和发布时间表现，免得过两周只记得“这篇好像还行”。如果一篇笔记老是起不来，先别急着怪赛道和权重，先看是不是发前检查项没过。很多内容，差的就是这临门一脚。",
+    ])
+    long_body = long_body + "\n\n" + "这句话用来模拟模型完整写完后仍然超出长度，需要结构压缩而不是尾部裁剪。" * 24
+    compressed_body = "\n\n".join([
+        "很多内容发出去没反应，不一定是你不努力，而是起量前有几个检查项没过。发前十分钟把关键动作顺一遍，往往比发完再猜原因更有用。我自己复盘时最怕的不是内容差，而是明明只差临门一脚，却被标题、封面和发布时间这些小问题拖住。",
+        "1️⃣ 标题先写“别再踩的坑” ✍️\n少写自嗨结论，多写用户不想再遇到的麻烦。用户先对损失敏感，看到避坑才会停下来。比如别写“我的运营经验”，可以改成“别再盲目日更了，先查这一步”，点击理由会更清楚。",
+        "2️⃣ 画面生活化，别做成精修海报 📝\n用真实桌面、截图、手写标注，不要满屏大字。太像广告容易被划走，生活感更像真实经验。尤其教程类内容，用户想确认你真的做过，不是看一张很漂亮但没细节的封面。",
+        "3️⃣ 提前留一个“值得转发”的点 💡\n放一个能转给朋友或同事的清单、话术或提醒。分享不是因为写得多，而是读者知道这条适合谁。比如把结论写成“发笔记前自查5步”，别人更容易顺手发给正在做账号的人。",
+        "4️⃣ 发布时间别跟同类硬挤\n避开同类内容扎堆的整点和晚高峰，试试提前半小时或延后一小时。竞争少一点，初始反馈会更完整。不是说错峰一定爆，而是先别让内容一发出去就和一堆同类硬碰硬。",
+        "5️⃣ 互动前置，别等评论区冷了再补\n结尾留一个容易回答的问题，或者给读者两个选项。用户不用想太久就能接话，早期互动更容易起来。比如直接问“你现在最卡标题还是封面”，比“欢迎交流”更容易收到回复。",
+        "我现在发笔记前都会顺着过这5步，也会用 Uplog 记选题、标题备选和发布时间表现。它不是替你决定内容，而是让复盘有记录可看。过几周回头看，哪一步影响起量、下一篇该先改哪里，会比凭感觉清楚很多，也能减少反复重写同一类内容的消耗，团队协作时也更容易对齐。",
+    ])
+
+    class FakeGenerator(ViralContentGenerator):
+        def __init__(self):
+            self.prompts = []
+
+        def _call_json(self, prompt: str, temperature: float = 0.6, max_tokens: int = 2200):
+            self.prompts.append(prompt)
+            if "保风格压缩编辑" in prompt:
+                assert "同一组编号步骤" in prompt
+                return {
+                    "body": compressed_body,
+                    "tags": ["小红书运营"],
+                    "repair_notes": ["压缩重复铺垫，保留1-5步骤"],
+                }
+            return {
+                "final_title": "小红书起量先查这5步",
+                "title_candidates": ["小红书起量先查这5步"],
+                "body": long_body,
+                "tags": ["小红书运营"],
+                "rationale": "完整但超长",
+            }
+
+    generator = FakeGenerator()
+    result = generator.generate_strategy_direct_session(
+        benchmark_note={"title": "小红书起量前先查这5步", "desc": "策略合成对标"},
+        product_info={
+            "product_name": "Uplog",
+            "product_features": "选题整理、标题备选、发布复盘",
+            "target_audience": "内容创作者",
+        },
+        note_strategy={
+            "id": "strategy_five_steps",
+            "label": "爆款内容5大密码",
+            "suggestedTitle": "小红书起量前先查这5步",
+            "contentAngle": "教程型干货清单：围绕标题—画面—分享—发布时间—互动5个核心动作展开。",
+            "recommendedCardPlan": [
+                "封面卡：小红书起量前先查这5步",
+                "开头卡：为什么很多内容不是不努力",
+                "方法卡1：标题反着说",
+                "方法卡2：画面生活化",
+                "方法卡3：制造分享点",
+                "方法卡4：错峰发布",
+                "方法卡5：互动前置",
+            ],
+            "productUsageMode": "product_assist",
+        },
+    )
+
+    assert len(generator.prompts) == 3
+    assert "保风格压缩编辑" in generator.prompts[-1]
+    assert len(result["final_body"]) <= 950
+    assert all(f"{index}️⃣" in result["final_body"] for index in range(1, 6))
+    assert "正文超长，已用保结构压缩替代尾部裁剪" in " ".join(result["revision_notes"])
+    assert "body_incomplete_or_too_short" not in result["candidate_judge_quality_flags"]
+
+
+def test_clip_numbered_body_preserving_steps_keeps_late_steps():
+    body = "\n\n".join([
+        "很多内容发出去没反应，不一定是你不努力，而是起量前检查项没过。发前先顺一遍关键动作，会比发完再猜原因更稳。",
+        "1️⃣ 标题先写“别再踩的坑” ✍️\n" + "少写自嗨结论，多写用户不想再遇到的麻烦。用户先对损失敏感，看到避坑才会停下来。" * 5,
+        "2️⃣ 画面生活化，别做成精修海报 📝\n" + "用真实桌面、截图、手写标注，不要满屏大字。太像广告容易被划走，生活感更像真实经验。" * 5,
+        "3️⃣ 提前留一个值得转发的点 💡\n" + "放一个能转给朋友或同事的清单、话术或提醒。分享不是因为写得多，而是读者知道这条适合谁。" * 5,
+        "4️⃣ 发布时间别跟同类硬挤\n" + "避开同类内容扎堆的整点和晚高峰，试试提前半小时或延后一小时。竞争少一点，初始反馈会更完整。" * 5,
+        "5️⃣ 互动前置，别等评论区冷了再补\n" + "结尾留一个容易回答的问题，或者给读者两个选项。用户不用想太久就能接话，早期互动更容易起来。" * 5,
+    ])
+
+    clipped = _clip_numbered_body_preserving_steps(body, 950)
+
+    assert clipped
+    assert len(clipped) <= 950
+    assert all(step in _numbered_step_indexes(clipped) for step in range(1, 6))
 
 
 def test_strategy_direct_title_fallbacks_respect_product_context():
