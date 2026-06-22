@@ -28,6 +28,14 @@ PRODUCT_USAGE_ASSIST = "product_assist"
 PRODUCT_USAGE_NONE = "no_product"
 NOTE_STRATEGY_MODEL_MAX_ATTEMPTS = 4
 NOTE_STRATEGY_MODEL_RETRY_BACKOFF_SECONDS = 3
+ABSTRACT_STRATEGY_LABEL_SUFFIXES = ("型", "法", "框架", "路径", "模型", "模板")
+ABSTRACT_STRATEGY_LABEL_RE = re.compile(r"(?:^|[｜|：:\s])[\u4e00-\u9fffA-Za-z0-9]{2,18}(?:型|法|框架|路径|模型|模板)(?:[｜|：:\s]|$)")
+LABEL_NATURAL_TITLE_MARKERS = ("为什么", "怎么", "如何", "不是", "别", "真的", "到底", "？", "?", "，", "、")
+AWKWARD_STRATEGY_LABEL_RE = re.compile(r"(?:更|很|非常|特别|尤其|最){1,2}最")
+AWKWARD_STRATEGY_PHRASE_REPLACEMENTS = {
+    "投了渠道却接不住客户": "投了很多渠道，但客户进来后没人及时跟进",
+    "渠道热闹但成交安静": "渠道数据看着热闹，但真正成交的客户不清楚",
+}
 
 
 def _build_strategy_creative_run_id() -> str:
@@ -48,6 +56,107 @@ def _split_text_items(value: str, limit: int = 6) -> List[str]:
         if item not in deduped:
             deduped.append(item)
     return deduped[:limit]
+
+
+def _compact_strategy_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _looks_like_abstract_strategy_label(value: Any) -> bool:
+    text = _compact_strategy_text(value)
+    if not text:
+        return False
+    first_part = re.split(r"[｜|：:]", text, maxsplit=1)[0].strip()
+    if first_part.endswith(ABSTRACT_STRATEGY_LABEL_SUFFIXES) and len(first_part) <= 18:
+        return True
+    return bool(ABSTRACT_STRATEGY_LABEL_RE.search(text))
+
+
+def _looks_like_compressed_strategy_label(value: Any) -> bool:
+    text = _compact_strategy_text(value)
+    if not text:
+        return False
+    if any(marker in text for marker in LABEL_NATURAL_TITLE_MARKERS):
+        return False
+    if len(text) <= 14 and re.search(r"(渠道|线索|客户|团队|系统|销售|员工|老板|流量|投流|咨询|私域).{0,8}(接不住|失控|断层|沉淀|承接|转化|归因|看不见|跟不上)", text):
+        return True
+    return False
+
+
+def _looks_like_awkward_strategy_label(value: Any) -> bool:
+    text = _compact_strategy_text(value)
+    if not text:
+        return False
+    return bool(AWKWARD_STRATEGY_LABEL_RE.search(text))
+
+
+def _normalize_strategy_label(label: Any, suggested_title: Any, fallback_label: Any) -> str:
+    label_text = _compact_strategy_text(label)
+    suggested_title_text = _compact_strategy_text(suggested_title)
+    fallback_text = _compact_strategy_text(fallback_label)
+
+    if (
+        _looks_like_compressed_strategy_label(label_text)
+        or _looks_like_awkward_strategy_label(label_text)
+    ) and suggested_title_text:
+        return suggested_title_text
+    if label_text:
+        return label_text
+    if suggested_title_text and not _looks_like_abstract_strategy_label(suggested_title_text):
+        return suggested_title_text
+    if "｜" in label_text or "|" in label_text:
+        tail = re.split(r"[｜|]", label_text, maxsplit=1)[1].strip()
+        if tail and not _looks_like_abstract_strategy_label(tail):
+            return tail
+    return label_text or fallback_text
+
+
+def _rewrite_awkward_strategy_phrases(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_rewrite_awkward_strategy_phrases(item) for item in value]
+    if not isinstance(value, str):
+        return value
+    rewritten = value
+    for source, replacement in AWKWARD_STRATEGY_PHRASE_REPLACEMENTS.items():
+        rewritten = rewritten.replace(source, replacement)
+    return rewritten
+
+
+def _normalize_strategy_content_angle(value: Any, fallback_value: Any) -> str:
+    text = _compact_strategy_text(value)
+    fallback_text = _compact_strategy_text(fallback_value)
+    return text or fallback_text
+
+
+def _strategy_visible_text(item: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    for key in [
+        "label",
+        "summary",
+        "targetAudience",
+        "contentAngle",
+        "noteGoal",
+        "suggestedTitle",
+        "recommendedCardPlan",
+        "corePainPoints",
+        "coreBenefits",
+    ]:
+        value = item.get(key)
+        if isinstance(value, list):
+            parts.extend(str(part) for part in value if str(part).strip())
+        elif value:
+            parts.append(str(value))
+    return " ".join(parts)
+
+
+def _contains_personal_ip_launch_signal(item: Dict[str, Any]) -> bool:
+    text = _strategy_visible_text(item)
+    lowered = text.lower()
+    return bool(
+        re.search(r"(?:demo|github|开源|链接).{0,18}(?:发布|放出|上线|征集|反馈)", lowered)
+        or re.search(r"(?:发布|放出|上线|征集反馈).{0,18}(?:demo|github|开源|链接|作品|项目|工具)", lowered)
+        or re.search(r"(?:做成|做了|先做|长出).{0,18}(?:小工具|工具|demo)", lowered)
+    )
 
 
 def _strip_html_to_text(raw_html: str) -> str:
@@ -175,6 +284,169 @@ def _keyword_score(text: str, keywords: List[str]) -> int:
         if keyword and keyword.lower() in lowered:
             score += 1
     return score
+
+
+def _research_context_text(research_context: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    for key in [
+        "product_name",
+        "summary",
+        "target_audience_insights",
+        "core_features",
+        "use_cases",
+        "differentiators",
+        "material_signals",
+    ]:
+        value = research_context.get(key)
+        if isinstance(value, list):
+            parts.extend(str(item) for item in value if str(item).strip())
+        elif value:
+            parts.append(str(value))
+    return " ".join(parts)
+
+
+def _research_context_primary_text(research_context: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    for key in ["product_name", "summary", "core_features", "use_cases", "differentiators"]:
+        value = research_context.get(key)
+        if isinstance(value, list):
+            parts.extend(str(item) for item in value if str(item).strip())
+        elif value:
+            parts.append(str(value))
+    return " ".join(parts)
+
+
+def _infer_account_content_route(
+    research_context: Dict[str, Any],
+    *,
+    product_usage_mode: str,
+    normalized_strategy_mode: str,
+) -> Dict[str, str]:
+    text = _research_context_text(research_context)
+    primary_text = _research_context_primary_text(research_context)
+    lowered = text.lower()
+    personal_score = _keyword_score(text, [
+        "个人ip", "个人 IP", "博主", "创作者", "记录者", "创始人", "独立开发者", "主理人",
+        "顾问", "设计师", "教练", "真实构建", "构建日志", "判断复盘", "踩坑", "人设",
+    ])
+    open_source_score = _keyword_score(primary_text, [
+        "github", "开源", "cli", "命令行",
+    ])
+    local_score = _keyword_score(text, [
+        "门店", "到店", "自提", "附近", "社区", "本地", "蛋糕", "烘焙", "咖啡", "顾客反馈",
+    ])
+    tool_score = _keyword_score(text, [
+        "工具", "app", "工作流", "一键", "导入", "分页", "水印", "违规检查", "自动", "cli",
+    ])
+    saas_score = _keyword_score(text, [
+        "saas", "scrm", "企业微信", "企微", "私域", "客户标签", "客户画像", "生命周期", "sop",
+    ])
+
+    primary_lowered = primary_text.lower()
+    open_source_is_primary = (
+        open_source_score >= 1
+        and re.search(r"github|开源|cli|命令行|开源项目", primary_lowered)
+        and not re.search(r"发布作品时才带|热点观点文默认不带|平常.*不强行承接", lowered)
+        and not re.search(r"个人ip|个人 IP|AI 博主|AI博主|记录者型|不是标准产品种草号", primary_text)
+    )
+
+    if open_source_is_primary and personal_score >= 1:
+        account_type = "open_source_project"
+        route_label = "个人IP宣传自己的项目/开源工具"
+        default_role = "launch"
+        default_intent = "launch"
+        default_usage = PRODUCT_USAGE_ASSIST
+        strategy_boundary = "先讲开发者为什么做、踩过什么坑、项目如何长出来；允许出现 Demo/GitHub/开源工具，但必须像项目进展或经验复盘，不写传统广告。"
+        diversity_boundary = "多样化在“开发过程、发布动机、使用场景、反馈征集、开源取舍、风险提醒”里展开，不要退化成普通工具卖点清单。"
+        closing_goal = "作品发布或反馈征集，产品/链接作为项目成果自然出现"
+    elif personal_score >= 2:
+        account_type = "personal_ip"
+        route_label = "个人IP"
+        default_role = "none"
+        default_intent = "case_record" if normalized_strategy_mode == "research_first" else "topic_explainer"
+        default_usage = PRODUCT_USAGE_NONE if normalized_strategy_mode == "research_first" else product_usage_mode
+        strategy_boundary = "内容主角是人的经历、判断、冲突、过程和观点；无对标时必须输出具体可发布选题句，每条都要有具体对象/具体动作/判断冲突，不能输出“某某型/某某法/某某框架/某某路径”这类栏目名，也不能用 XX/某个/这个/那一步 这类占位表达。"
+        diversity_boundary = "多样化在“真实项目过程、判断变化、踩坑复盘、砍功能、发布 Demo、热点观点、从业务问题长出工具”里展开，但每条都要落到一个具体业务场景或真实动作，例如投放复盘、内容改写、发布前检查、客户承接、工作流拆分；不要为了变化写成产品硬广或空泛方法论。"
+        closing_goal = "观点收束或读者自查；除非发布 Demo/GitHub/作品，否则不硬带产品"
+    elif local_score >= 2:
+        account_type = "service"
+        route_label = "本地门店/服务"
+        default_role = "solution"
+        default_intent = "problem_solution"
+        default_usage = PRODUCT_USAGE_MAIN
+        strategy_boundary = "内容主角是本地消费场景、口味/服务、信任理由、顾客反馈和下单/收藏理由；不要写成 SaaS 方法论或泛运营教程。"
+        diversity_boundary = "多样化在“生日、下午茶、节日礼盒、低甜口味、附近自提、真实反馈、临时送礼”等消费场景里展开。"
+        closing_goal = "收藏、到店、自提或下单理由"
+    elif saas_score >= 2:
+        account_type = "saas"
+        route_label = "普通SaaS/产品"
+        default_role = "solution" if product_usage_mode == PRODUCT_USAGE_MAIN else ("none" if product_usage_mode == PRODUCT_USAGE_NONE else "assist")
+        default_intent = "problem_solution" if default_role == "solution" else ("topic_explainer" if default_role == "none" else "benchmark_tips")
+        default_usage = product_usage_mode
+        strategy_boundary = "保持现有产品策略：围绕业务痛点、具体场景、功能收益和转化承接，不要被个人IP化或门店化。"
+        diversity_boundary = "多样化在“客户来源、客户标签、画像沉淀、销售交接、生命周期、SOP 跟进、活动复盘、分群触达”等业务矛盾里展开。"
+        closing_goal = "按产品介入边界自然收束"
+    elif tool_score >= 2:
+        account_type = "tool"
+        route_label = "工具/App"
+        default_role = "solution" if product_usage_mode == PRODUCT_USAGE_MAIN else ("none" if product_usage_mode == PRODUCT_USAGE_NONE else "assist")
+        default_intent = "tutorial" if default_role != "none" else "topic_explainer"
+        default_usage = product_usage_mode
+        strategy_boundary = "内容要绑定具体工作流和执行动作；如果产品只接住其中一环，必须写成用户正在做的具体动作、工具处理方式和减少的返工成本。"
+        diversity_boundary = "多样化必须围绕当前产品资料里的真实工作流展开，例如资料中明确出现的操作步骤、协作节点、检查动作、复用场景或返工成本；不要借用其他工具的固定功能词。"
+        closing_goal = "用具体执行动作或读者自查自然收束"
+    else:
+        account_type = "product"
+        route_label = "通用产品/服务"
+        default_role = "solution" if product_usage_mode == PRODUCT_USAGE_MAIN else ("none" if product_usage_mode == PRODUCT_USAGE_NONE else "assist")
+        default_intent = "problem_solution" if default_role == "solution" else ("topic_explainer" if default_role == "none" else "benchmark_tips")
+        default_usage = product_usage_mode
+        strategy_boundary = "按当前产品信息生成策略，优先保持产品真实性、用户场景和承接边界。"
+        diversity_boundary = "多样化必须发生在当前产品真实场景内部，不要为了变化跳到无关账号类型。"
+        closing_goal = "按产品介入边界自然收束"
+
+    if _contains_no_product_instruction(" ".join(str(item) for item in research_context.get("material_signals") or [])):
+        default_role = "none"
+        default_usage = PRODUCT_USAGE_NONE
+
+    conditional_launch_mention = re.search(
+        r"才.*(?:github|demo|链接|作品)|只有.*(?:github|demo|链接|作品).*才|"
+        r"平常.*不.*(?:带|出现|强行)|默认不带|发布作品时才带|发布.*时才",
+        lowered,
+    )
+    if product_usage_mode == PRODUCT_USAGE_NONE:
+        default_role = "none"
+        default_usage = PRODUCT_USAGE_NONE
+    elif (
+        account_type == "personal_ip"
+        and not conditional_launch_mention
+        and re.search(r"github|开源|上线|launch|发布\s*(demo|作品|项目|工具)|放出\s*(demo|作品|项目|工具)|征集反馈", primary_lowered)
+    ):
+        default_role = "launch"
+        default_intent = "launch"
+        default_usage = PRODUCT_USAGE_ASSIST
+
+    return {
+        "account_type": account_type,
+        "route_label": route_label,
+        "default_product_role": default_role,
+        "default_content_intent": default_intent,
+        "default_product_usage_mode": default_usage,
+        "strategy_boundary": strategy_boundary,
+        "diversity_boundary": diversity_boundary,
+        "closing_goal": closing_goal,
+    }
+
+
+def _should_include_account_route_prompt(
+    account_route: Dict[str, str],
+    *,
+    effective_product_usage_mode: str,
+) -> bool:
+    account_type = str(account_route.get("account_type") or "").strip()
+    if effective_product_usage_mode in {PRODUCT_USAGE_ASSIST, PRODUCT_USAGE_NONE}:
+        return True
+    return account_type in {"personal_ip", "open_source_project", "tool", "service"}
 
 
 class NoteStrategyService:
@@ -445,9 +717,9 @@ class NoteStrategyService:
         else:
             mode = PRODUCT_USAGE_ASSIST if soft_score or strong_score else PRODUCT_USAGE_NONE
             fit_level = "soft_fit" if mode == PRODUCT_USAGE_ASSIST else "no_fit"
-            reason = "对标笔记主要是内容方法或泛教程，产品最多辅助完成其中一部分，不应抢主线。"
+            reason = "对标笔记主要是内容方法或泛教程，产品只适合接住其中一个具体执行动作，不应抢主线。"
             risk = "如果把每个步骤都映射成功能，会把方法论笔记改成产品教程，降低原文吸引力。"
-            allowed = "内容方法是主线；产品只可在结尾、附赠页或少量步骤中轻承接。"
+            allowed = "内容方法是主线；产品只放进结尾、附赠页或少量步骤中的具体工具动作。"
             forbidden = ["不要每一招都映射成产品功能", "不要把标题改成产品广告", "不要把正文写成完整产品教程"]
             assets = ["标题钩子", "教程步骤", "封面情绪", "卡片顺序", "结尾互动"]
 
@@ -732,11 +1004,52 @@ class NoteStrategyService:
             use_model=use_model,
         )
         product_usage_mode = benchmark_fit.get("product_usage_mode") or PRODUCT_USAGE_MAIN
+        account_route = _infer_account_content_route(
+            research_context,
+            product_usage_mode=product_usage_mode,
+            normalized_strategy_mode=normalized_strategy_mode,
+        )
+        effective_product_usage_mode = account_route.get("default_product_usage_mode") or product_usage_mode
         diagnosis_text = json.dumps(benchmark_fit, ensure_ascii=False, indent=2)
         creative_run_id = _build_strategy_creative_run_id()
+        include_account_route_prompt = _should_include_account_route_prompt(
+            account_route,
+            effective_product_usage_mode=effective_product_usage_mode,
+        )
+        account_route_prompt = f"""
+【产品介入边界】
+内容类型判断：{account_route["route_label"]}
+产品介入模式：{effective_product_usage_mode}
+边界说明：{account_route["strategy_boundary"]}
+类型内发散范围：{account_route["diversity_boundary"]}
+结尾落点：{account_route["closing_goal"]}
+
+这个边界只决定产品、账号资产或链接怎么出现，不替代原有策略主引擎。
+策略仍然必须从具体人群、具体场景、真实痛点、卖点/观点和卡片推进里长出来。
+如果是个人IP，内容主角是人的经历、判断、冲突、过程和观点；非 Demo/GitHub/作品发布场景不要硬带产品。
+如果是工具/App 且产品只接住一环，要写成读者正在做的具体执行动作，不要把全文扩成产品教程。
+如果是本地门店/服务，要落到消费场景、信任理由和收藏/到店/下单动作，不要写成泛运营方法论。
+"""
+        if account_route["account_type"] == "personal_ip" and normalized_strategy_mode == "research_first":
+            account_route_prompt += """
+个人IP无对标时，三套策略至少两套必须是 no_product 的观点/复盘/判断内容；发布 Demo/GitHub 只能作为其中一套可选策略。
+个人IP策略要具体到真实业务动作或真实冲突，例如“投放复盘为什么先砍自动化”“内容改写为什么先定读者场景”；禁止使用 XX、某个、某一步、这一步、那一步 这类占位表达。
+"""
+        account_route_prompt_for_generation = account_route_prompt if include_account_route_prompt else ""
+        unified_strategy_quality_prompt = """
+【统一策略质量底线】
+生成前做内部自检：三套策略都要像真实业务现场、真实人会点开的选题，不要只是一组栏目名或泛泛方法论。
+每套至少要看得出：谁在什么场景卡住、具体冲突是什么、继续错下去会有什么后果、这篇给出什么动作/判断/解决方案、最后怎么自然收束。
+recommendedCardPlan 要有推进感：封面/开场给场景或冲突，中段拆误区/痛点/证据，后段给动作/结果/收口；不要只写“问题页/解决页/收口页”的空壳。
+label 是前端策略卡片名，也是生文里的策略名称；它不是小红书正文标题，也不是空泛栏目名。要像一句具体业务矛盾或策划判断，短、清楚、有现场感，例如“客户不是没来，是卡死在交接断层”“客户很多，但高价值的人总被慢待”。不要写成“投了渠道却接不住客户”“渠道热闹但成交安静”这种压缩策划词。
+suggestedTitle 才是小红书标题方向，可以更像“为什么/不是/别再/到底/怎么办”的可点击标题。
+如果 label 使用“XX型”，必须同时带具体对象或具体冲突，例如“渠道归因复盘型：老板说不清哪路客户最值钱”；不要只写“资产化复盘型/需求长出来型”这类空泛栏目名。
+"""
         shared_diversity_prompt = f"""
 【本轮创意批次】
 creative_run_id: {creative_run_id}
+
+{account_route_prompt_for_generation}
 
 这个 ID 不是历史记忆，也不是固定模板，只用于提醒你：同一产品每次生成策略时，都要重新完成一次真实策划发散，不要沿用最稳的老套路。
 
@@ -745,6 +1058,9 @@ creative_run_id: {creative_run_id}
 三套策略不能只是同一个方向换词，至少要在以下 5 项中有 4 项明显不同：目标人群/具体场景、开头钩子、痛点组织方式、利益证明方式、产品角色或无产品承接方式、recommendedCardPlan 的分页推进。
 contentAngle 要写成清晰可执行的策划角度；可参考教程型/卖点种草型/问题解决型/功能推荐型，但不限于这些，也可以自由命名；禁止使用抽象黑话。
 多样化不能牺牲产品真实性、对标约束、卡片可执行性，也不能改变前端、生文、生图依赖的字段结构。
+
+{unified_strategy_quality_prompt}
+
 近期已覆盖的高层方向：
 {recent_signal_text}
 如果近期方向不为“暂无”，本轮不要把三套策略全部落回这些高层方向；可以保留其中一个最强方向，但其余策略必须从更具体的新矛盾命题中展开。
@@ -762,8 +1078,9 @@ contentAngle 要写成清晰可执行的策划角度；可参考教程型/卖点
 """
         product_assist_diversity_prompt = shared_diversity_prompt + """
 本分支多样化边界：
-所有方向都必须保持“内容主线 + 产品轻承接”，但三套不能只是同一个轻承接位置换词。
+所有方向都必须保持“内容主线 + 一个具体工具动作接入”，但三套不能只是同一个出现位置换词。
 差异要来自对标主线选择、产品承接点、产品出现位置、产品出现身份、卡片推进方式；不允许扩展成产品主导或完整产品教程。
+产品接入必须翻译成用户能读懂的具体动作桥：先说用户在哪个执行动作卡住，再说产品如何减少返工/漏项；可见字段只写具体执行页、检查页或工具动作页。
 """
         no_product_diversity_prompt = shared_diversity_prompt + """
 本分支多样化边界：
@@ -857,15 +1174,15 @@ contentAngle 要写成清晰可执行的策划角度；可参考教程型/卖点
                 fallback_strategies = [
                     {
                         "id": "benchmark_content_main_tool_tail",
-                        "label": "内容主线轻承接",
-                        "summary": f"保留对标笔记的方法或话题主线，{product_name_for_strategy}只在结尾或附赠页作为辅助工具轻带。",
+                        "label": "方法主线执行版",
+                        "summary": f"保留对标笔记的方法或话题主线，{product_name_for_strategy}只接住其中一个具体执行动作。",
                         "targetAudience": target_audience_insights[0] if target_audience_insights else "会被对标方法吸引的用户",
                         "corePainPoints": ["想照着方法做", "希望减少执行成本"],
-                        "coreBenefits": ["保留原文方法吸引力", "产品只辅助执行不抢主线", "更像自然经验分享"],
+                        "coreBenefits": ["保留原文方法吸引力", "只接住一个具体执行卡点", "更像自然经验分享"],
                         "contentAngle": benchmark_category or "方法复刻型",
-                        "noteGoal": f"让内容先成立，再把{product_name_for_strategy}作为执行辅助或基础设施示例轻轻带出",
+                        "noteGoal": f"让内容先成立，再把{product_name_for_strategy}放进一个具体执行动作里",
                         "visualDirection": "tutorial",
-                        "recommendedCardPlan": ["对标式封面", "方法开场页", "核心步骤页", "执行提醒页", f"产品轻承接页：用{product_name_for_strategy}作为辅助例子，不展开成产品种草", "互动收束页"],
+                        "recommendedCardPlan": ["对标式封面", "方法开场页", "核心步骤页", "执行提醒页", f"工具动作页：用{product_name_for_strategy}接住其中一个具体执行卡点，不展开成产品种草", "互动收束页"],
                         "suggestedTitle": benchmark_title or "照着这套方法先跑顺",
                     },
                     {
@@ -876,39 +1193,39 @@ contentAngle 要写成清晰可执行的策划角度；可参考教程型/卖点
                         "corePainPoints": use_cases[:2] or ["知道方法但执行慢", "步骤多容易乱"],
                         "coreBenefits": ["方法不被广告打断", "产品出现更自然", "保留收藏价值"],
                         "contentAngle": "教程方法型",
-                        "noteGoal": f"保护对标内容资产，同时明确{product_name_for_strategy}只在一个合理辅助位置出现",
+                        "noteGoal": f"保护对标内容资产，同时明确{product_name_for_strategy}只接住一个具体执行卡点",
                         "visualDirection": "tutorial",
-                        "recommendedCardPlan": ["强方法封面", "原文式问题页", "步骤拆解页", "注意事项页", f"辅助工具页：{product_name_for_strategy}承接其中一个执行难点", "结尾互动页"],
+                        "recommendedCardPlan": ["强方法封面", "原文式问题页", "步骤拆解页", "注意事项页", f"工具动作页：{product_name_for_strategy}接住其中一个执行难点", "结尾互动页"],
                         "suggestedTitle": benchmark_title or "这套方法可以先收藏",
                     },
                     {
                         "id": "benchmark_assist_optional",
-                        "label": "可选工具辅助版",
-                        "summary": "把产品定义为可选辅助，不作为内容证明的前提，避免把对标笔记改成产品教程。",
+                        "label": "工具动作接入版",
+                        "summary": "把产品放进一个可理解的执行动作里，不作为内容证明的前提，避免把对标笔记改成产品教程。",
                         "targetAudience": "对标原文人群与产品潜在人群的交集",
                         "corePainPoints": use_cases[:2] or ["想做但缺少顺手工具", "执行链路比较碎"],
                         "coreBenefits": core_features[:2] or ["降低执行成本", "让流程更顺"],
                         "contentAngle": "轻工具承接型",
-                        "noteGoal": f"让用户先认可内容方法，再自然理解{product_name_for_strategy}的可选辅助价值",
+                        "noteGoal": f"让用户先认可内容方法，再自然理解{product_name_for_strategy}能减少哪一步返工",
                         "visualDirection": "general",
-                        "recommendedCardPlan": ["原文钩子封面", "方法价值页", "步骤推进页", f"轻工具承接页：说明{product_name_for_strategy}能辅助哪一步", "总结页"],
+                        "recommendedCardPlan": ["原文钩子封面", "方法价值页", "步骤推进页", f"执行卡点页：说明{product_name_for_strategy}能减少哪一步返工", "总结页"],
                         "suggestedTitle": benchmark_title or "按这套思路做会顺很多",
                     },
                 ]
-                prompt = f"""你是小红书爆款仿写策划助手。现在不要直接写正文，而是先根据已选对标笔记，输出 3 套“内容主线 + 产品轻承接”的笔记策略方案。
+                prompt = f"""你是小红书爆款仿写策划助手。现在不要直接写正文，而是先根据已选对标笔记，输出 3 套“内容主线 + 具体工具动作接入”的笔记策略方案。
 
 本次对标可迁移性诊断：
 {diagnosis_text}
 
 要求：
 1. 对标笔记的爆点、标题风格、切入角度、卡片节奏和表达重心必须是主线
-2. 产品只能作为辅助承接，通常出现在最后 1-2 段、附赠页、工具辅助页或某一个执行环节
+2. 产品只能接住其中一个具体执行环节，通常出现在最后 1-2 段、附赠页、检查页或某一个工具动作页
 3. 不允许把每个步骤都映射成产品功能，不允许写成完整产品教程
 4. 可以参考产品信息判断“哪里能轻带”，但不能让产品抢走原文爆点
-5. recommendedCardPlan 必须具体到封面卡、方法卡、承接卡、结尾卡，保证卡片策略质量
-6. 每套策略必须明确写出产品承接点：产品在哪一页/哪一段出现、以什么身份出现、承接原文哪个问题
-7. 每套策略的 recommendedCardPlan 必须至少包含 1 个明确的“产品轻承接页/工具辅助页/基础设施示例页”，并点名当前产品名称；但其它卡片仍以对标原文爆点为主
-8. noteGoal 或 summary 里必须说明产品只是辅助承接，不是本篇主角
+5. recommendedCardPlan 必须具体到封面卡、方法卡、执行动作卡、结尾卡，保证卡片策略质量
+6. 每套策略必须明确写出产品接住的是哪个读者动作：产品在哪一页/哪一段出现、以什么身份出现、解决原文里的哪个执行卡点
+7. 每套策略的 recommendedCardPlan 必须至少包含 1 个明确的具体执行页/检查页/工具动作页，并点名当前产品名称；但其它卡片仍以对标原文爆点为主
+8. noteGoal 或 summary 里必须说明内容主线优先，产品只接住具体执行动作；所有用户可见字段都要写成读者动作，不写内部策划判断
 9. 如果用户给了纠偏说明，必须优先按纠偏说明重排策略
 10. 输出严格 JSON
 
@@ -1085,7 +1402,7 @@ contentAngle 要写成清晰可执行的策划角度；可参考教程型/卖点
   "strategies": [
     {
       "id": "strategy_id",
-      "label": "显示名",
+      "label": "策略卡片名：一句具体业务矛盾或策划判断，不是小红书正文标题",
       "summary": "一句策略摘要",
       "targetAudience": "这篇主要打给谁",
       "corePainPoints": ["..."],
@@ -1104,11 +1421,19 @@ contentAngle 要写成清晰可执行的策划角度；可参考教程型/卖点
             return {
                 "selected_strategy_id": fallback_strategies[0]["id"],
                 "strategies": [
-                    {**item, "benchmarkFit": benchmark_fit, "productUsageMode": product_usage_mode}
+                    {
+                        **item,
+                        "benchmarkFit": benchmark_fit,
+                        "productUsageMode": effective_product_usage_mode,
+                        "accountType": account_route["account_type"],
+                        "contentIntent": account_route["default_content_intent"],
+                        "productRole": account_route["default_product_role"],
+                        "closingGoal": account_route["closing_goal"],
+                    }
                     for item in fallback_strategies
                 ],
                 "benchmark_fit": benchmark_fit,
-                "product_usage_mode": product_usage_mode,
+                "product_usage_mode": effective_product_usage_mode,
                 "fallback_used": True,
                 "fallback_reason": "model_disabled",
             }
@@ -1131,31 +1456,103 @@ contentAngle 要写成清晰可执行的策划角度；可参考教程型/卖点
                 for index, item in enumerate(strategies[:3]):
                     if not isinstance(item, dict):
                         continue
+                    item_product_usage_mode = item.get("productUsageMode") or effective_product_usage_mode
+                    route_default_role = str(account_route.get("default_product_role") or "").strip()
+                    default_product_role = route_default_role or (
+                        "solution"
+                        if item_product_usage_mode == PRODUCT_USAGE_MAIN
+                        else "none" if item_product_usage_mode == PRODUCT_USAGE_NONE else "assist"
+                    )
+                    default_content_intent = str(account_route.get("default_content_intent") or "").strip()
+                    if not default_content_intent:
+                        default_content_intent = (
+                            "problem_solution"
+                            if default_product_role == "solution"
+                            else "topic_explainer" if default_product_role == "none" else "benchmark_tips"
+                        )
+                    raw_content_intent = str(item.get("contentIntent") or item.get("content_intent") or "").strip()
+                    raw_product_role = str(item.get("productRole") or item.get("product_role") or "").strip()
+                    final_account_type = account_route["account_type"]
+                    final_content_intent = raw_content_intent or default_content_intent
+                    final_product_role = raw_product_role or default_product_role
+                    launch_roles = {"launch", "example", "demo"}
+                    if account_route["account_type"] == "personal_ip":
+                        item_has_launch_signal = _contains_personal_ip_launch_signal(item)
+                        route_defaults_to_launch = (
+                            account_route.get("default_product_role") == "launch"
+                            or account_route.get("default_content_intent") == "launch"
+                        )
+                        launch_like = (
+                            final_content_intent == "launch"
+                            or final_product_role in launch_roles
+                            or (route_defaults_to_launch and item_has_launch_signal)
+                            or item_has_launch_signal
+                        )
+                        if launch_like:
+                            final_content_intent = "launch"
+                            if final_product_role not in launch_roles:
+                                final_product_role = "launch"
+                            item_product_usage_mode = PRODUCT_USAGE_ASSIST
+                        else:
+                            final_product_role = "none"
+                            item_product_usage_mode = PRODUCT_USAGE_NONE
+                    elif account_route["account_type"] == "open_source_project":
+                        if final_product_role not in {"launch", "example", "demo", "assist"}:
+                            final_product_role = "launch"
+                        final_content_intent = "launch" if final_product_role == "launch" else final_content_intent
+                        item_product_usage_mode = PRODUCT_USAGE_ASSIST
+                    elif item_product_usage_mode == PRODUCT_USAGE_NONE:
+                        final_product_role = "none"
+                    fallback_strategy = fallback_strategies[min(index, len(fallback_strategies) - 1)]
+                    normalized_label = _normalize_strategy_label(
+                        item.get("label"),
+                        item.get("suggestedTitle"),
+                        fallback_strategy["label"],
+                    )
+                    normalized_content_angle = _normalize_strategy_content_angle(
+                        item.get("contentAngle"),
+                        fallback_strategy["contentAngle"],
+                    )
                     normalized.append({
-                        "id": item.get("id") or fallback_strategies[min(index, len(fallback_strategies) - 1)]["id"],
-                        "label": item.get("label") or fallback_strategies[min(index, len(fallback_strategies) - 1)]["label"],
-                        "summary": item.get("summary") or fallback_strategies[min(index, len(fallback_strategies) - 1)]["summary"],
-                        "targetAudience": item.get("targetAudience") or fallback_strategies[min(index, len(fallback_strategies) - 1)]["targetAudience"],
-                        "corePainPoints": item.get("corePainPoints") or fallback_strategies[min(index, len(fallback_strategies) - 1)]["corePainPoints"],
-                        "coreBenefits": item.get("coreBenefits") or fallback_strategies[min(index, len(fallback_strategies) - 1)]["coreBenefits"],
-                        "contentAngle": item.get("contentAngle") or fallback_strategies[min(index, len(fallback_strategies) - 1)]["contentAngle"],
-                        "noteGoal": item.get("noteGoal") or fallback_strategies[min(index, len(fallback_strategies) - 1)]["noteGoal"],
-                        "visualDirection": item.get("visualDirection") or fallback_strategies[min(index, len(fallback_strategies) - 1)]["visualDirection"],
-                        "recommendedCardPlan": item.get("recommendedCardPlan") or fallback_strategies[min(index, len(fallback_strategies) - 1)]["recommendedCardPlan"],
-                        "suggestedTitle": item.get("suggestedTitle") or fallback_strategies[min(index, len(fallback_strategies) - 1)]["suggestedTitle"],
+                        "id": item.get("id") or fallback_strategy["id"],
+                        "label": normalized_label,
+                        "summary": _rewrite_awkward_strategy_phrases(item.get("summary") or fallback_strategy["summary"]),
+                        "targetAudience": _rewrite_awkward_strategy_phrases(item.get("targetAudience") or fallback_strategy["targetAudience"]),
+                        "corePainPoints": _rewrite_awkward_strategy_phrases(item.get("corePainPoints") or fallback_strategy["corePainPoints"]),
+                        "coreBenefits": _rewrite_awkward_strategy_phrases(item.get("coreBenefits") or fallback_strategy["coreBenefits"]),
+                        "contentAngle": normalized_content_angle,
+                        "noteGoal": _rewrite_awkward_strategy_phrases(item.get("noteGoal") or fallback_strategy["noteGoal"]),
+                        "visualDirection": item.get("visualDirection") or fallback_strategy["visualDirection"],
+                        "recommendedCardPlan": _rewrite_awkward_strategy_phrases(item.get("recommendedCardPlan") or fallback_strategy["recommendedCardPlan"]),
+                        "suggestedTitle": _rewrite_awkward_strategy_phrases(item.get("suggestedTitle") or fallback_strategy["suggestedTitle"]),
                         "benchmarkFit": item.get("benchmarkFit") or benchmark_fit,
-                        "productUsageMode": item.get("productUsageMode") or product_usage_mode,
+                        "productUsageMode": item_product_usage_mode,
+                        "accountType": final_account_type,
+                        "contentIntent": final_content_intent,
+                        "productRole": final_product_role,
+                        "closingGoal": item.get("closingGoal") or item.get("closing_goal") or account_route["closing_goal"],
                     })
 
                 if not normalized:
                     raise ValueError("策略模型返回的 strategies 为空，请重试生成")
 
                 selected_strategy_id = payload.get("selected_strategy_id") or normalized[0]["id"]
+                response_product_usage_mode = effective_product_usage_mode
+                if account_route["account_type"] == "personal_ip":
+                    selected_strategy = next(
+                        (item for item in normalized if item.get("id") == selected_strategy_id),
+                        normalized[0],
+                    )
+                    response_product_usage_mode = (
+                        PRODUCT_USAGE_ASSIST
+                        if selected_strategy.get("productRole") in {"launch", "example", "demo"}
+                        else PRODUCT_USAGE_NONE
+                    )
                 return {
                     "selected_strategy_id": selected_strategy_id,
                     "strategies": normalized,
                     "benchmark_fit": benchmark_fit,
-                    "product_usage_mode": product_usage_mode,
+                    "product_usage_mode": response_product_usage_mode,
                     "fallback_used": False,
                     "fallback_reason": "",
                 }

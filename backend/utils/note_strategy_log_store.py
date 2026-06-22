@@ -1,4 +1,5 @@
 import json
+import re
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -37,6 +38,29 @@ def _safe_json_loads(value: Any) -> Any:
         return json.loads(value)
     except Exception:
         return None
+
+
+def _looks_like_abstract_signal(value: Any) -> bool:
+    text_value = str(value or "").strip()
+    if not text_value:
+        return False
+    first_part = text_value.split("｜", 1)[0].split("|", 1)[0].split("：", 1)[0].split(":", 1)[0].strip()
+    if first_part.endswith(("型", "法", "框架", "路径", "模型", "模板")) and len(first_part) <= 18:
+        return True
+    return bool(re.search(r"(?:^|[｜|：:\s])[\u4e00-\u9fffA-Za-z0-9]{2,18}(?:型|法|框架|路径|模型|模板)(?:[｜|：:\s]|$)", text_value))
+
+
+def _strategy_signal_text(strategy: Dict[str, Any]) -> str:
+    candidates = [
+        _clip(strategy.get("summary"), 70),
+        _clip(strategy.get("suggestedTitle"), 42),
+        _clip(strategy.get("label"), 42),
+        _clip(strategy.get("contentAngle"), 56),
+    ]
+    clean_candidates = [item for item in candidates if item and not _looks_like_abstract_signal(item)]
+    if clean_candidates:
+        return clean_candidates[0]
+    return next((item for item in candidates if item), "")
 
 
 def ensure_note_strategy_log_schema() -> None:
@@ -169,12 +193,7 @@ def list_recent_note_strategy_signals(
         for strategy in strategies:
             if not isinstance(strategy, dict):
                 continue
-            parts = [
-                _clip(strategy.get("label"), 28),
-                _clip(strategy.get("contentAngle"), 36),
-                _clip(strategy.get("summary"), 70),
-            ]
-            signal = "｜".join(part for part in parts if part)
+            signal = _strategy_signal_text(strategy)
             if not signal or signal in seen:
                 continue
             seen.add(signal)

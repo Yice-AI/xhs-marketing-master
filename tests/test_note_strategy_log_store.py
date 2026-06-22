@@ -98,6 +98,6 @@ def test_list_recent_note_strategy_signals_returns_compact_direction_text(monkey
     )
 
     assert signals == [
-        "老板经营诊断型｜经营问题拆解｜从老板看不到客户资产沉淀切入。",
-        "合规风控型｜风险场景拆解｜围绕会话留痕和敏感词预警展开。",
+        "从老板看不到客户资产沉淀切入。",
+        "围绕会话留痕和敏感词预警展开。",
     ]

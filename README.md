@@ -1,14 +1,20 @@
 # xhs-marketing-master
 
-**AI-powered Rednote / Xiaohongshu marketing workspace for strategy, copywriting, image generation, browser extension workflows, and content operations.**
+**XHS AI Notes / 小红书 AI 笔记工具：AI-powered Rednote / Xiaohongshu marketing workspace for strategy, copywriting, image generation, browser extension workflows, and content operations.**
 
 面向小红书运营、品牌营销和内容团队的 AI 增长工作台。
+
+如果你在找“小红书笔记工具”“小红书 AI 写作工具”“小红书笔记生成器”或 “Rednote marketing tool”，这个项目提供的是一套更完整的开源工作台：不是只生成一段文案，而是把选题、对标、策略、标题正文、封面配图、采集发布和内容复盘串起来。
 
 它把“小红书内容运营”里最耗时间的环节串成一条工作流：对标样本分析、产品卖点访谈、爆款策略生成、标题与正文创作、封面/配图生成、历史草稿管理，以及通过浏览器插件完成真实页面采集与发布前检查。
 
 传统运营常常卡在三个地方：不知道选什么角度、写出来不像小红书、封面和配图跟不上内容节奏。这个项目的目标就是把这些工作系统化，让运营从“靠感觉写一篇”升级成“按策略生产、按样本校准、按结果复盘”。
 
-English summary: this project is a public noncommercial snapshot of an AI marketing workspace for Rednote/Xiaohongshu content teams. It combines content strategy, benchmark note analysis, AI copywriting, AI image generation, browser-extension automation, and content asset management.
+English summary: this project is a public noncommercial snapshot of an AI notes and marketing workspace for Rednote/Xiaohongshu content teams. It combines XHS note generation, content strategy, benchmark note analysis, AI copywriting, AI image generation, browser-extension automation, and content asset management.
+
+## 常见搜索词
+
+小红书笔记工具、小红书 AI 笔记工具、小红书文案生成器、小红书笔记生成器、小红书运营工具、小红书自动化工具、小红书封面生成、小红书对标分析、Rednote AI notes、Xiaohongshu note generator、Xiaohongshu marketing tool、Rednote marketing automation。
 
 ## 它能解决什么问题
 
@@ -72,7 +78,7 @@ English summary: this project is a public noncommercial snapshot of an AI market
 
 ## 关键词
 
-小红书运营工具、Rednote marketing tool、Xiaohongshu AI marketing、AI content strategy、AI copywriting、AI image generation、browser extension automation、content operations、marketing automation、growth workspace。
+小红书笔记工具、小红书 AI 笔记工具、小红书文案生成器、小红书笔记生成器、小红书运营工具、小红书自动化工具、小红书对标分析、小红书封面生成、Rednote AI notes、Rednote marketing tool、Xiaohongshu note generator、Xiaohongshu AI marketing、AI content strategy、AI copywriting、AI image generation、browser extension automation、content operations、marketing automation、growth workspace。
 
 ## 本地开发
 

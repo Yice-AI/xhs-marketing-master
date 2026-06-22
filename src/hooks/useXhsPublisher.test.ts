@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { clickXhsPublishButtonInPage, uploadXhsImageFilesInPage } from './useXhsPublisher';
+import { clickXhsPublishButtonInPage, fillXhsPublishTextInPage, uploadXhsImageFilesInPage } from './useXhsPublisher';
 
 const setVisibleRect = (element: HTMLElement, rect: Partial<DOMRect> = {}) => {
   element.getBoundingClientRect = vi.fn(() => ({
@@ -14,6 +14,30 @@ const setVisibleRect = (element: HTMLElement, rect: Partial<DOMRect> = {}) => {
     toJSON: () => ({}),
     ...rect,
   } as DOMRect));
+};
+
+const installExecCommandMock = () => {
+  document.execCommand = vi.fn((command: string, _showUI?: boolean, value?: string) => {
+    const active = document.activeElement as HTMLElement | null;
+    if (!active) return false;
+    if (command === 'selectAll') {
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+        active.value = '';
+      } else {
+        active.textContent = '';
+      }
+      return true;
+    }
+    if (command === 'insertText') {
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+        active.value += value || '';
+      } else {
+        active.textContent = `${active.textContent || ''}${value || ''}`;
+      }
+      return true;
+    }
+    return false;
+  });
 };
 
 describe('clickXhsPublishButtonInPage', () => {
@@ -117,6 +141,55 @@ describe('clickXhsPublishButtonInPage', () => {
     expect(result.data?.kind).toBe('host');
     expect(result.data?.action).toBe('event');
     expect(publishListener).toHaveBeenCalledOnce();
+  });
+});
+
+describe('fillXhsPublishTextInPage', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    vi.useRealTimers();
+    installExecCommandMock();
+  });
+
+  it('waits for the XHS editor to appear before filling title and content', async () => {
+    vi.useFakeTimers();
+    const fill = fillXhsPublishTextInPage('验证标题', '验证正文内容', []);
+
+    await vi.advanceTimersByTimeAsync(900);
+    const titleWrapper = document.createElement('div');
+    titleWrapper.className = 'd-input';
+    const titleInput = document.createElement('input');
+    titleInput.type = 'text';
+    titleWrapper.appendChild(titleInput);
+
+    const editorWrapper = document.createElement('div');
+    editorWrapper.className = 'editor-container';
+    const editor = document.createElement('div');
+    editor.setAttribute('role', 'textbox');
+    editor.setAttribute('contenteditable', 'true');
+    editorWrapper.appendChild(editor);
+    document.body.append(titleWrapper, editorWrapper);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await fill;
+
+    expect(result.success).toBe(true);
+    expect(result.message).toBe('标题/内容已填充');
+    expect(titleInput.value).toBe('验证标题');
+    expect(editor.textContent).toContain('验证正文内容');
+  });
+
+  it('returns a clear timeout message when the publish editor never appears', async () => {
+    vi.useFakeTimers();
+    const fill = fillXhsPublishTextInPage('验证标题', '验证正文内容', []);
+
+    await vi.advanceTimersByTimeAsync(31000);
+    const result = await fill;
+
+    expect(result).toEqual({
+      success: false,
+      message: '等待发布编辑区超时，标题/正文输入框未出现',
+    });
   });
 });
 

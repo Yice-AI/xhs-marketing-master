@@ -19,6 +19,104 @@ export type RuntimeEvaluateResult = {
 
 type XhsUploadFilePayload = { name: string; type: string; base64: string };
 
+export const fillXhsPublishTextInPage = async (
+  titleArg: string,
+  contentArg: string,
+  tagsArg: string[],
+): Promise<RuntimeEvaluateResult> => {
+  const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+  const normalizeText = (value: string) => String(value || '').replace(/\s+/g, '').trim();
+  const getTitleInput = () => document.querySelector("div.d-input input") as HTMLInputElement | null;
+  const getContentEditor = () => document.querySelector('.editor-container [role="textbox"]') as HTMLElement | null;
+  const waitForEditor = async () => {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 30000) {
+      const titleEl = getTitleInput();
+      const contentEl = getContentEditor();
+      if (titleEl && contentEl) {
+        return { titleEl, contentEl };
+      }
+      await delay(300);
+    }
+    return null;
+  };
+  const moveCaretToEnd = (el: HTMLElement) => {
+    el.focus();
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  };
+
+  const ready = await waitForEditor();
+  if (!ready) {
+    return {
+      success: false,
+      message: "等待发布编辑区超时，标题/正文输入框未出现",
+    };
+  }
+  const { titleEl, contentEl } = ready;
+
+  titleEl.focus();
+  document.execCommand("selectAll", false);
+  document.execCommand("insertText", false, titleArg);
+  titleEl.dispatchEvent(new Event('input', { bubbles: true }));
+  titleEl.dispatchEvent(new Event('change', { bubbles: true }));
+  await delay(300);
+
+  contentEl.focus();
+  document.execCommand("selectAll", false);
+  document.execCommand("insertText", false, contentArg + '\n\n');
+  contentEl.dispatchEvent(new Event('input', { bubbles: true }));
+  await delay(200);
+  moveCaretToEnd(contentEl);
+
+  for (const tag of tagsArg) {
+    moveCaretToEnd(contentEl);
+
+    const normalizedTag = String(tag || '').trim().replace(/^#+/, '').replace(/\s+/g, '');
+    if (!normalizedTag) continue;
+
+    document.execCommand("insertText", false, "#");
+    contentEl.dispatchEvent(new Event('input', { bubbles: true }));
+    contentEl.dispatchEvent(new KeyboardEvent('keyup', { key: '#', code: 'Digit3', keyCode: 51, which: 51, bubbles: true }));
+    await delay(600);
+
+    document.execCommand("insertText", false, normalizedTag);
+    contentEl.dispatchEvent(new Event('input', { bubbles: true }));
+    await delay(1000);
+
+    const enterDown = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
+    const enterUp = new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
+    contentEl.dispatchEvent(enterDown);
+    contentEl.dispatchEvent(enterUp);
+    await delay(400);
+
+    const possibleTopicItem = document.querySelector('.publish-topic-list li, .topic-container li, [class*="topic"] li') as HTMLElement | null;
+    if (possibleTopicItem) {
+      possibleTopicItem.click();
+      await delay(200);
+    }
+
+    moveCaretToEnd(contentEl);
+    document.execCommand("insertText", false, " ");
+    contentEl.dispatchEvent(new Event('input', { bubbles: true }));
+    await delay(300);
+  }
+
+  const titleOk = normalizeText(titleEl.value).includes(normalizeText(titleArg).slice(0, 20));
+  const contentText = contentEl.innerText || contentEl.textContent || '';
+  const contentOk = normalizeText(contentText).includes(normalizeText(contentArg).slice(0, 20));
+
+  return {
+    success: titleOk && contentOk,
+    message: titleOk && contentOk ? "标题/内容已填充" : "标题/内容写入校验失败",
+  };
+};
+
 export const uploadXhsImageFilesInPage = async (filesArg: XhsUploadFilePayload[]): Promise<RuntimeEvaluateResult> => {
   const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
   const isFileInput = (node: Element | null): node is HTMLInputElement => (
@@ -500,97 +598,12 @@ export const useXhsPublisher = () => {
 
       setStatusMessage("正在填充标题和内容...");
 
-      const setTextCode = async (t: string, c: string, tagsArr: string[]) => {
-        const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
-        const moveCaretToEnd = (el: HTMLElement) => {
-          el.focus();
-          const selection = window.getSelection();
-          if (!selection) return;
-          const range = document.createRange();
-          range.selectNodeContents(el);
-          range.collapse(false);
-          selection.removeAllRanges();
-          selection.addRange(range);
-        };
-
-        const setTitle = (value: string) => {
-          const el = document.querySelector("div.d-input input") as HTMLElement | null;
-          if (!el) return false;
-          el.focus();
-          document.execCommand("selectAll", false);
-          document.execCommand("insertText", false, value);
-          return true;
-        };
-
-        const setContentAndTags = async (value: string, tags: string[]) => {
-          const el = document.querySelector('.editor-container [role="textbox"]') as HTMLElement | null;
-          if (!el) return false;
-          el.focus();
-          document.execCommand("selectAll", false);
-
-          // Insert main content
-          document.execCommand("insertText", false, value + '\n\n');
-          await delay(200);
-          moveCaretToEnd(el);
-
-          // Insert tags one by one and add space to trigger conversion
-          for (const tag of tags) {
-            moveCaretToEnd(el);
-
-            // 1. 单独输入 #，触发联想菜单的底层检测
-            const normalizedTag = String(tag || '').trim().replace(/^#+/, '').replace(/\s+/g, '');
-            if (!normalizedTag) continue;
-
-            document.execCommand("insertText", false, "#");
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent('keyup', { key: '#', code: 'Digit3', keyCode: 51, which: 51, bubbles: true }));
-            await delay(600); // 必须等待动画和组件响应
-
-            // 2. 输入标签的真实文字
-            document.execCommand("insertText", false, normalizedTag);
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            await delay(1000); // 等待网络请求加载联想结果
-
-            // 3. 模拟按下回车键选中第一个联想话题
-            const enterDown = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
-            const enterUp = new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
-            el.dispatchEvent(enterDown);
-            el.dispatchEvent(enterUp);
-            await delay(400);
-
-            // 4. 暴力后备：如果回车键失效，尝试抓取页面上的话题下拉框并点击第一项
-            const possibleTopicItem = document.querySelector('.publish-topic-list li, .topic-container li, [class*="topic"] li') as HTMLElement | null;
-            if (possibleTopicItem) {
-              possibleTopicItem.click();
-              await delay(200);
-            }
-
-            // 5. 补充一个真实的空格隔离下一个标签
-            moveCaretToEnd(el);
-            document.execCommand("insertText", false, " ");
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            await delay(300);
-          }
-          return true;
-        };
-
-        await delay(500);
-        const titleOk = setTitle(t);
-        await delay(500);
-        const contentOk = await setContentAndTags(c, tagsArr);
-
-        return {
-          success: titleOk && contentOk,
-          message: titleOk && contentOk ? "标题/内容已填充" : "标题/内容填充失败"
-        };
-      };
-
       console.log('[发布] 填充标题和内容, tabId:', currentPublishTab.id);
 
       const setResp = await extension.invoke("web:runtime:evaluate", {
         tabId: currentPublishTab.id,
         args: [title, content, publishTags],
-        code: setTextCode.toString(),
+        code: fillXhsPublishTextInPage.toString(),
       });
 
       console.log('[发布] 填充响应:', setResp);

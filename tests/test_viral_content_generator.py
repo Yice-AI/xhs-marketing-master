@@ -372,6 +372,46 @@ def test_structural_guard_catches_long_body_missing_strategy_steps():
     )
 
 
+def test_structural_guard_does_not_treat_card_pages_as_required_body_steps():
+    body = (
+        "很多人想做个人产品，真正卡住的不是不会做，而是不知道先做哪一个。"
+        "我更建议先回到一线信号里找，而不是先脑暴功能。"
+        * 12
+        + "\n\n1️⃣ 先看反复出现的业务信号\n"
+        + "搜索词、投放评论、用户咨询和运营重复动作，都是比灵感更可靠的入口。\n\n"
+        + "2️⃣ 再判断这个问题值不值得做\n"
+        + "看它是否高频、是否明确、是否能先做一个轻版本验证。\n\n"
+        + "3️⃣ 把大问题收敛成第一版MVP\n"
+        + "不要一上来做完整系统，先做检查表、模板、工具页或简易工作流。\n\n"
+        + "4️⃣ 刻意不做太重的功能\n"
+        + "先不做复杂协作、数据报表和全平台打通，只保留最小闭环。"
+        + "这样才能先验证再投入，也能让读者把自己的业务场景代入进去。"
+    )
+
+    strategy = {
+        "recommendedCardPlan": [
+            "封面：强调不是找灵感，而是从真实业务信号里挖出能做的MVP",
+            "第1页：先抛场景，很多人想做产品但不知道做什么",
+            "第2页：展示原始信号来源，例如搜索词、投放评论、运营重复动作",
+            "第3页：说明怎么判断这个问题值不值得做",
+            "第4页：把大问题收敛成第一版可交付物",
+            "第5页：展示搭建过程中的取舍",
+            "第6页：给出初步验证方式",
+            "第7页：总结适合哪类人",
+        ],
+    }
+
+    assert len(body) >= 800
+    assert not _is_structurally_incomplete_publish_body(
+        body,
+        contract={
+            "strict_structure_units": True,
+            "structure_units": strategy["recommendedCardPlan"],
+        },
+        note_strategy=strategy,
+    )
+
+
 def test_title_score_penalizes_promised_steps_missing_in_body():
     body = (
         "1️⃣ 先区分客户来源\n客户从哪里来要先分清。\n\n"
@@ -537,7 +577,7 @@ def test_product_assist_quality_flags_require_light_bridge():
     )
 
     bridged_flags = _body_publish_quality_flags(
-        body + "\n\n壹伴助手适合放在最后做辅助承接，把排版、敏感词检查和素材管理这些发布前动作固定下来。",
+        body + "\n\n如果你每次写完内容，还卡在排版、敏感词检查和素材管理这些动作上，可以用壹伴助手提前处理掉。",
         title_candidates=["发文前这几项别漏"],
         product_usage_mode="product_assist",
         product_info={
@@ -548,6 +588,21 @@ def test_product_assist_quality_flags_require_light_bridge():
 
     assert "product_assist_missing_bridge" in missing_flags
     assert "product_assist_missing_bridge" not in bridged_flags
+
+
+def test_product_assist_quality_flags_reject_internal_tail():
+    body = _long_xhs_body("发公众号前，很多细节不是不会做，而是忙起来就会漏。")
+    flags = _body_publish_quality_flags(
+        body + "\n\n如果要把这套发布动作固定下来，壹伴助手适合放在最后做辅助。",
+        title_candidates=["发文前这几项别漏"],
+        product_usage_mode="product_assist",
+        product_info={
+            "product_name": "壹伴助手",
+            "product_features": "公众号排版、敏感词检查、素材管理、AI辅助写作",
+        },
+    )
+
+    assert "product_assist_internal_tail" in flags
 
 
 def test_product_assist_bridge_must_be_in_tail_not_earlier_body():
@@ -597,6 +652,27 @@ def test_ensure_product_assist_bridge_adds_short_deterministic_bridge():
     assert notes
 
 
+def test_ensure_product_assist_bridge_replaces_internal_tail():
+    body = (
+        _long_xhs_body("发公众号前，很多细节不是不会做，而是忙起来就会漏。")
+        + "\n\n如果要把这套发布动作固定下来，壹伴助手适合放在最后做辅助。"
+    )
+
+    bridged, notes = _ensure_product_assist_bridge(
+        body,
+        {
+            "product_name": "壹伴助手",
+            "product_features": "公众号排版、敏感词检查、素材管理、AI辅助写作",
+        },
+        max_chars=XHS_STRATEGY_BODY_TARGET_MAX_CHARS,
+    )
+
+    assert "适合放在最后做辅助" not in bridged
+    assert "壹伴助手" in bridged
+    assert "卡在" in bridged
+    assert notes
+
+
 def test_finalize_body_complete_guard_clips_to_complete_sentence():
     body = _long_xhs_body("追热点前，先想清楚账号定位。") + "\n\n如果你也有追完热点更乱"
 
@@ -623,12 +699,27 @@ def test_product_assist_bridge_respects_product_category():
         }
     )
 
-    assert "客户承接流程" in private_domain_bridge
+    assert "客户分层" in private_domain_bridge
     assert "重复询问" in private_domain_bridge
     assert "发布前固定流程" not in private_domain_bridge
     assert "决定内容" not in private_domain_bridge
-    assert "内容发布前" in content_tool_bridge
-    assert "临发前漏项" in content_tool_bridge
+    assert "导入" in content_tool_bridge
+    assert "漏项返工" in content_tool_bridge
+
+
+def test_product_assist_bridge_uses_developer_workflow_for_open_source_tool():
+    bridge = _build_product_assist_bridge_paragraph(
+        {
+            "product_name": "PatchPilot 开源CLI",
+            "target_audience": "独立开发者、开源维护者",
+            "product_features": "读取git diff、生成PR说明、风险点提醒、GitHub链接",
+        }
+    )
+
+    assert "整理 diff" in bridge
+    assert "PR 说明" in bridge
+    assert "风险点" in bridge
+    assert "导入、分页" not in bridge
 
 
 def test_candidate_judge_rewrite_session_repairs_checklist_and_finalizes_title(monkeypatch):

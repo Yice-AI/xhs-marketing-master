@@ -272,6 +272,10 @@ def _build_strategy_direct_contract(note_strategy: Optional[Dict[str, Any]], exp
             or "按策略主线写成真实场景、判断、动作和收束"
         ).strip(),
         "product_role": str(note_strategy.get("productRole") or note_strategy.get("productUsageMode") or "按策略自然承接").strip(),
+        "account_type": str(note_strategy.get("accountType") or note_strategy.get("account_type") or "").strip(),
+        "content_intent": str(note_strategy.get("contentIntent") or note_strategy.get("content_intent") or "").strip(),
+        "closing_goal": str(note_strategy.get("closingGoal") or note_strategy.get("closing_goal") or "").strip(),
+        "creator_voice": str(note_strategy.get("creatorVoice") or note_strategy.get("creator_voice") or "").strip(),
         "title_style": str(expression_seed.get("title_style_hint") or "标题要贴合策略场景、痛点和结果。").strip(),
         "emoji_style": str(expression_seed.get("emoji_style_hint") or "").strip(),
         "tag_style": "、".join(str(item) for item in (expression_seed.get("tag_hints") or [])),
@@ -919,6 +923,8 @@ def _body_publish_quality_flags(
     if product_usage_mode == "product_assist" and product_name:
         if text.count(product_name) >= 4:
             flags.append("product_overexposed")
+        if _has_internal_product_assist_tail(text):
+            flags.append("product_assist_internal_tail")
         if not _has_product_assist_bridge(text, product_info):
             flags.append("product_assist_missing_bridge")
 
@@ -995,25 +1001,53 @@ def _build_product_assist_bridge_paragraph(product_info: Dict[str, Any]) -> str:
     feature_text = "、".join(feature_terms) or "检查、记录和提醒"
     category = _infer_product_expression_category(product_info)
     name_text = product_name or "这类辅助工具"
+    product_context = _compact_text_for_expression(
+        product_info.get("product_name"),
+        product_info.get("target_audience"),
+        product_info.get("product_features"),
+        product_info.get("must_include"),
+    )
+    if any(term in product_context for term in ["开源", "GitHub", "github", "CLI", "命令行", "git diff", "PR", "pr说明", "代码"]):
+        return (
+            f"如果你每次改完代码，都卡在整理 diff、补 PR 说明、提醒风险点这些动作上，"
+            f"可以用{name_text}把{feature_text}先梳理出来。"
+            "它不替你决定代码怎么改，只是减少发布前回忆改动、补说明和漏风险的返工。"
+        )
     if "私域" in category or "SCRM" in category or "B2B" in category:
         return (
-            f"如果要把这套承接动作固定下来，{name_text}更适合放在后段做辅助，"
-            f"把{feature_text}变成团队可复用的客户承接流程。它不替销售判断客户，只帮团队把信息接住，减少换人后重复询问和跟进断层。"
+            f"如果团队已经卡在客户分层、跟进记录和换人交接这些动作上，"
+            f"可以用{name_text}把{feature_text}接进日常流程。"
+            "它不替销售判断客户，只是把信息接住，减少重复询问和跟进断层。"
         )
     if "内容工具" in category or "写作效率" in category:
         return (
-            f"如果要把这套发布动作固定下来，{name_text}适合放在最后做辅助，"
-            f"把{feature_text}变成内容发布前的固定流程。它不替你决定选题，只帮团队少靠临场记忆，减少临发前漏项和返工。"
+            f"如果你每次写完内容，还卡在导入、分页、检查或统一格式这些动作上，"
+            f"可以用{name_text}把{feature_text}提前处理掉。"
+            "它不替你决定选题，只是减少发布前反复搬运和漏项返工。"
         )
     if product_name:
         return (
-            f"如果要把这套动作固定下来，{product_name}适合放在最后做辅助，"
-            f"把{feature_text}变成团队可复用流程。它不替你做关键判断，只帮团队少靠临场记忆，减少重复返工。"
+            f"如果你已经反复卡在这些固定动作上，可以用{product_name}把{feature_text}先接住。"
+            "它不替你做关键判断，只是减少临场记忆和重复返工。"
         )
     return (
-        f"如果要把这套动作固定下来，可以用辅助工具把{feature_text}变成团队可复用流程。"
-        "它不替你做关键判断，只帮团队少靠临场记忆，减少重复返工。"
+        f"如果你已经反复卡在这些固定动作上，可以用辅助工具先接住{feature_text}。"
+        "它不替你做关键判断，只是减少临场记忆和重复返工。"
     )
+
+
+def _has_internal_product_assist_tail(text: str) -> bool:
+    tail = str(text or "").strip()[-520:]
+    if not tail:
+        return False
+    internal_patterns = [
+        r"适合放在(?:最后|后段)做辅助",
+        r"产品只是辅助承接",
+        r"本篇主角不是产品",
+        r"如果要把这套(?:发布|承接)?动作固定下来",
+        r"产品只(?:可|能)?作为辅助",
+    ]
+    return any(re.search(pattern, tail) for pattern in internal_patterns)
 
 
 def _ensure_product_assist_bridge(
@@ -1023,10 +1057,19 @@ def _ensure_product_assist_bridge(
     max_chars: int = XHS_BODY_SAFE_MAX_CHARS,
 ) -> tuple[str, List[str]]:
     text = str(body or "").strip()
-    if not text or _has_product_assist_bridge(text, product_info):
+    has_internal_tail = _has_internal_product_assist_tail(text)
+    if not text or (_has_product_assist_bridge(text, product_info) and not has_internal_tail):
         return text, []
 
     bridge = _build_product_assist_bridge_paragraph(product_info)
+    if has_internal_tail:
+        paragraphs = _split_paragraphs(text)
+        paragraphs = [
+            paragraph
+            for paragraph in paragraphs
+            if not _has_internal_product_assist_tail(paragraph)
+        ]
+        text = "\n\n".join(paragraphs).strip()
     reserve = max(420, max_chars - len(bridge) - 2)
     base = _clip_body_to_complete_sentence_limit(text, reserve)
     if len(base) < min(len(text), 420):
@@ -1039,7 +1082,12 @@ def _ensure_product_assist_bridge(
         soft_limit=max_chars,
         hard_limit=XHS_BODY_MAX_CHARS,
     )
-    return combined, ["已确定性补回产品轻承接，避免 product_assist 成稿完全变成经验文", *limit_notes]
+    note = (
+        "已替换内部策略式产品尾段，改为具体动作承接"
+        if has_internal_tail
+        else "已确定性补回产品轻承接，避免 product_assist 成稿完全变成经验文"
+    )
+    return combined, [note, *limit_notes]
 
 
 def _finalize_body_complete_guard(body: str) -> tuple[str, List[str]]:
@@ -1606,6 +1654,8 @@ def _format_product_usage_constraints(note_strategy: Optional[Dict[str, Any]]) -
         return f"""【产品介入约束：product_assist】
 本次内容主线必须先服务对标笔记的原始爆点，产品只可作为辅助承接。
 产品信息最多出现在最后 1-2 段、附赠提醒或某一个执行环节；禁止把每个步骤都改成产品功能；禁止让标题和正文变成完整产品教程。
+禁止写“适合放在最后做辅助”“产品只是辅助承接”“本篇主角不是产品”等内部策略话术。
+轻承接必须写成读者视角：先说具体卡点，再说产品能减少哪类返工或成本。
 诊断依据：{fit_text}
 """
     return ""
@@ -1699,6 +1749,14 @@ def _ends_with_bare_step_heading(body: str) -> bool:
     ))
 
 
+def _is_card_page_outline(outline: List[Any]) -> bool:
+    if len(outline) < 4:
+        return False
+    page_heading_pattern = re.compile(r"^(?:封面|第\s*[一二三四五六七八九十\d]+\s*页|尾页|结尾页|总结页)\s*[：:、,，]?", re.I)
+    hits = sum(1 for item in outline if page_heading_pattern.match(str(item or "").strip()))
+    return hits >= max(3, len(outline) // 2)
+
+
 def _is_structurally_incomplete_publish_body(
     body: str,
     *,
@@ -1727,19 +1785,26 @@ def _is_structurally_incomplete_publish_body(
                 break
 
     steps = _numbered_step_indexes(text)
+    outline_is_card_pages = _is_card_page_outline(outline)
     if outline and len(outline) >= 4:
         covered = sum(1 for item in outline if _outline_item_covered(text, item))
         product_assist_outline = _get_note_strategy_product_usage_mode(note_strategy) == "product_assist"
         expected_numbered_steps = min(len(outline) - 2 if product_assist_outline else len(outline), 6)
         strict_structure_units = bool((contract or {}).get("strict_structure_units"))
-        if strict_structure_units and steps and max(steps) >= 4 and max(steps) < expected_numbered_steps:
+        if (
+            strict_structure_units
+            and not outline_is_card_pages
+            and steps
+            and max(steps) >= 4
+            and max(steps) < expected_numbered_steps
+        ):
             return True
         if not steps and len(text) < 600 and covered == 0:
             return True
 
     if steps:
         max_step = max(steps)
-        expects_steps = len(outline) >= 3 or any(
+        expects_steps = (len(outline) >= 3 and not outline_is_card_pages) or any(
             keyword in _normalize_outline_token(item)
             for item in outline
             for keyword in ("步骤", "流程", "清单", "教程", "处理", "收束")
@@ -1789,9 +1854,10 @@ def _strategy_direct_incomplete_reasons(
                 break
 
     steps = _numbered_step_indexes(text)
+    outline_is_card_pages = _is_card_page_outline(outline)
     if steps:
         max_step = max(steps)
-        expects_steps = len(outline) >= 3 or any(
+        expects_steps = (len(outline) >= 3 and not outline_is_card_pages) or any(
             keyword in _normalize_outline_token(item)
             for item in outline
             for keyword in ("步骤", "流程", "清单", "教程", "处理", "收束")
@@ -1804,7 +1870,12 @@ def _strategy_direct_incomplete_reasons(
             product_assist_outline = _get_note_strategy_product_usage_mode(note_strategy) == "product_assist"
             expected_numbered_steps = min(len(outline) - 2 if product_assist_outline else len(outline), 6)
             strict_structure_units = bool((contract or {}).get("strict_structure_units"))
-            if strict_structure_units and max_step >= 4 and max_step < expected_numbered_steps:
+            if (
+                strict_structure_units
+                and not outline_is_card_pages
+                and max_step >= 4
+                and max_step < expected_numbered_steps
+            ):
                 reasons.append("strict_outline_steps_missing")
 
     if generator._is_likely_incomplete_xhs_body(text, min_chars=XHS_STRATEGY_BODY_MIN_COMPLETE_CHARS):
@@ -2583,6 +2654,7 @@ class ViralContentGenerator:
             product_brief_text = "本次产品介入模式为 no_product。产品信息不得进入标题、正文、卡片骨架或策略锚点。"
         product_assist_generation_rule = (
             "- 当前是 product_assist：正文主线先讲策略爆点，产品只在最后 1 段自然承接；建议只出现 1 次产品名，不能写成功能教程。\n"
+            "- 产品轻承接必须使用“具体卡点 + 产品 + 减少的返工/成本”表达，禁止写“适合放在最后做辅助/固定下来/产品只是辅助承接”。\n"
             if product_usage_mode == "product_assist"
             else ""
         )
@@ -2754,8 +2826,9 @@ class ViralContentGenerator:
 6. 如果正文太短，补足具体场景、判断、动作、结果和自然收束，不要只续写几句。
 7. 如果正文太像 SOP 清单，要补“真实发生的麻烦”和“为什么这样做”的判断句。
 8. 如果有 product_assist_missing_bridge，最后补 1 段自然产品辅助承接；不能写成整篇产品教程。
-9. 如果有 layout_too_plain 或 emoji_style_weak，补 4-7 个贴合语境的 emoji；不要堆表情。
-10. 严格遵守产品介入边界：{product_usage_mode or "按策略自然处理"}。
+9. 如果有 product_assist_internal_tail，删掉“适合放在最后做辅助/固定下来/产品只是辅助承接”等内部策略话术，改成“具体卡点 + 产品 + 减少的返工成本”的读者视角表达。
+10. 如果有 layout_too_plain 或 emoji_style_weak，补 4-7 个贴合语境的 emoji；不要堆表情。
+11. 严格遵守产品介入边界：{product_usage_mode or "按策略自然处理"}。
 {product_assist_generation_rule}
 请输出严格 JSON：
 {{
@@ -2930,7 +3003,10 @@ class ViralContentGenerator:
                 contract=contract,
                 product_usage_mode=product_usage_mode,
             )
-            if "product_assist_missing_bridge" in assist_flags:
+            if (
+                "product_assist_missing_bridge" in assist_flags
+                or "product_assist_internal_tail" in assist_flags
+            ):
                 final_body, bridge_notes = _ensure_product_assist_bridge(
                     final_body,
                     product_info,
@@ -3324,6 +3400,7 @@ class ViralContentGenerator:
             product_brief_text = "本次产品介入模式为 no_product。产品信息不得进入标题、正文、卡片骨架或策略锚点。"
         product_assist_generation_rule = (
             "- 当前是 product_assist：正文主线仍先讲对标爆点，但最后必须有 1 段自然产品/能力承接；建议只出现 1 次产品名，或用 2-3 个核心能力说明它如何辅助落地，不能完全不接产品。\n"
+            "- 产品轻承接必须使用“具体卡点 + 产品 + 减少的返工/成本”表达，禁止写“适合放在最后做辅助/固定下来/产品只是辅助承接”。\n"
             if product_usage_mode == "product_assist"
             else ""
         )
